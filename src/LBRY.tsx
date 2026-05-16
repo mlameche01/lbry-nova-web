@@ -1,136 +1,140 @@
-const VERSION_2_0: string = "2.0";
+// LBRY / Odysee public API — sans daemon local requis
+const ODYSEE_API = "https://api.na-backend.odysee.com/api/v1/proxy";
+const LIGHTHOUSE_URL = "https://lighthouse.odysee.tv/search";
+const THUMBNAIL_CDN = "https://thumbnails.odycdn.com/optimize/s:390:0/quality:85/plain/";
+const PLAYER_CDN = "https://player.odycdn.com/api/v3/streams/free";
 
-const CLAIM_SEARCH: string = "claim_search";
-const FILE_REFLECT: string = "file_reflect";
-const GET: string = "get";
-const PREFERENCE_GET: string = "preference_get";
-const RESOLVE: string = "resolve";
-const SETTINGS_GET: string = "settings_get";
-const STATUS: string = "status";
-const TXO_LIST: string = "txo_list";
-const VERSION: string = "version";
-const WALLET_BALANCE: string = "wallet_balance";
+const FRENCH_TAGS = [
+  "french","français","francais","france","québec","quebec",
+  "algérie","algerie","maroc","tunisie","belgique","suisse",
+  "afrique francophone","fr","maghreb","dz","ma","tn",
+];
+
+const NOT_TAGS_DEFAULT: string[] = [
+  "porn","porno","nsfw","mature","xxx","sex","creampie",
+  "blowjob","handjob","vagina","boobs","big boobs","big dick",
+  "pussy","cumshot","anal","hard fucking","ass","fuck","hentai",
+];
 
 function generateID(): number {
   return Math.ceil(Math.random() * 65536) + 1;
 }
 
-function isUsingProxy(): boolean {
-  return import.meta.env.VITE_DAEMON_PROXY === "true";
+async function rpc(method: string, params: object): Promise<object> {
+  const res = await fetch(ODYSEE_API, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", method, params, id: generateID() }),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+  return data;
 }
 
-const storageDaemonRPCKey: string = "daemon-rpc";
-
-function getStaticDaemonRPC(): string | null {
-  return import.meta.env.VITE_DAEMON_STATIC ?? null;
+async function claimSearch(params: object): Promise<object[]> {
+  const json = await rpc("claim_search", { no_totals: true, has_source: true, ...params });
+  return (json as any).result?.items ?? [];
 }
 
-function getDaemonRPC(): string | null {
-  const staticDaemonRPC: string | null = getStaticDaemonRPC();
-  if (staticDaemonRPC) {
-    return staticDaemonRPC;
-  }
-  return sessionStorage.getItem(storageDaemonRPCKey);
+async function resolve(urls: string[]): Promise<object> {
+  const json = await rpc("resolve", { urls, include_purchase_receipt: false });
+  return (json as any).result ?? {};
 }
 
-function setDaemonRPC(url: string | null): void {
-  const oldURL: string | null = getDaemonRPC();
-  if (url === null) {
-    sessionStorage.removeItem(storageDaemonRPCKey);
-  } else {
-    sessionStorage.setItem(storageDaemonRPCKey, url);
+async function getStreamUrl(claim: object): Promise<string> {
+  const sdHash = (claim as any).value?.source?.sd_hash;
+  const name = (claim as any).name;
+  const id = (claim as any).claim_id;
+  if (sdHash && name && id) {
+    return `${PLAYER_CDN}/${encodeURIComponent(name)}/${id}/${sdHash.slice(0, 6)}.mp4`;
   }
-
-  const eventDict: StorageEventInit = {
-    key: storageDaemonRPCKey,
-    storageArea: sessionStorage,
-  };
-  if (url) {
-    eventDict.newValue = url;
-  }
-  if (oldURL) {
-    eventDict.oldValue = oldURL;
-  }
-
-  const event: StorageEvent = new StorageEvent("storage", eventDict);
-
-  window.dispatchEvent(event);
+  return `https://odysee.com/$/embed/${encodeURIComponent(name ?? "")}/${id}`;
 }
 
-async function rpcDirect(
-  input: string | URL | Request,
-  method: string,
-  params?: object,
-  authorization?: string,
-): Promise<object> {
-  const headers: Headers = new Headers();
-  if (authorization) {
-    headers.append("Authorization", authorization);
-  }
-  headers.append("Content-Type", "application/json");
-
-  const message: object = {
-    jsonrpc: VERSION_2_0,
-    method: method,
-    params: params || undefined,
-    id: generateID(),
-  };
-
-  return await (
-    await fetch(input, {
-      method: "POST",
-      headers: headers,
-      body: JSON.stringify(message),
-    })
-  ).json();
+function thumbnailUrl(url?: string): string {
+  if (!url) return "";
+  return `${THUMBNAIL_CDN}${encodeURIComponent(url)}`;
 }
 
-async function rpcProxy(
-  input: string | URL | Request,
-  method: string,
-  params?: object,
-  authorization?: string,
-): Promise<object> {
-  const url: URL = new URL("/api/rpc", window.location.href);
-  if (typeof input === "string") {
-    url.searchParams.set("url", input);
-  }
-  if (input instanceof URL) {
-    url.searchParams.set("url", input.href);
-  }
-  if (input instanceof Request) {
-    url.searchParams.set("url", input.url);
-  }
-  return await rpcDirect(url, method, params, authorization);
+async function getTrending(page = 1, pageSize = 20): Promise<object[]> {
+  // Essai 1 : langue fr + tags fr
+  try {
+    const items = await claimSearch({
+      page, page_size: pageSize,
+      claim_type: ["stream"],
+      stream_types: ["video"],
+      order_by: ["trending_group", "trending_mixed"],
+      not_tags: NOT_TAGS_DEFAULT,
+      any_languages: ["fr"],
+      any_tags: FRENCH_TAGS,
+    });
+    if (items.length > 0) return items;
+  } catch { /* continue */ }
+  // Fallback : tags fr seulement
+  return claimSearch({
+    page, page_size: pageSize,
+    claim_type: ["stream"],
+    stream_types: ["video"],
+    order_by: ["trending_group", "trending_mixed"],
+    not_tags: NOT_TAGS_DEFAULT,
+    any_tags: FRENCH_TAGS,
+  });
 }
 
-async function rpc(
-  input: string | URL | Request | null,
-  method: string,
-  params?: object,
-  authorization?: string,
-  proxy?: boolean,
-): Promise<object> {
-  if (proxy) {
-    return await rpcProxy(input ?? "", method, params, authorization);
-  }
-  return await rpcDirect(input ?? "", method, params, authorization);
+async function getChannelVideos(channelId: string, page = 1, pageSize = 20): Promise<object[]> {
+  return claimSearch({
+    channel_ids: [channelId],
+    page, page_size: pageSize,
+    claim_type: ["stream"],
+    stream_types: ["video"],
+    order_by: ["release_time"],
+  });
+}
+
+async function searchContent(query: string, page = 1, pageSize = 20): Promise<object[]> {
+  if (!query.trim()) return [];
+  // Lighthouse FR en priorité
+  try {
+    const [frRes, allRes] = await Promise.allSettled([
+      fetch(`${LIGHTHOUSE_URL}?${new URLSearchParams({ s: query, size: String(pageSize), from: String((page-1)*pageSize), language: "fr" })}`),
+      fetch(`${LIGHTHOUSE_URL}?${new URLSearchParams({ s: query, size: String(pageSize), from: String((page-1)*pageSize) })}`),
+    ]);
+    const extractIds = async (r: PromiseSettledResult<Response>): Promise<string[]> => {
+      if (r.status !== "fulfilled" || !r.value.ok) return [];
+      const items = await r.value.json() as { claimId?: string }[];
+      return items.map(i => i.claimId).filter(Boolean) as string[];
+    };
+    const [frIds, allIds] = await Promise.all([extractIds(frRes), extractIds(allRes)]);
+    const seen = new Set(frIds);
+    const merged = [...frIds, ...allIds.filter(id => !seen.has(id))].slice(0, pageSize);
+    if (merged.length > 0) {
+      const json = await rpc("claim_search", { claim_ids: merged, page: 1, page_size: merged.length, no_totals: true });
+      const map = new Map(((json as any).result?.items ?? []).map((c: any) => [c.claim_id, c]));
+      return merged.map(id => map.get(id)).filter(Boolean) as object[];
+    }
+  } catch { /* fallback */ }
+  // Fallback RPC
+  const [frItems, allItems] = await Promise.allSettled([
+    claimSearch({ any_tags: [query.toLowerCase(), ...FRENCH_TAGS], any_languages: ["fr"], page, page_size: pageSize, claim_type: ["stream", "channel"], order_by: ["release_time"], not_tags: NOT_TAGS_DEFAULT }),
+    claimSearch({ text: query, page, page_size: pageSize, claim_type: ["stream", "channel"], order_by: ["release_time"], not_tags: NOT_TAGS_DEFAULT }),
+  ]);
+  const fr = frItems.status === "fulfilled" ? frItems.value : [];
+  const all = allItems.status === "fulfilled" ? allItems.value : [];
+  const seen = new Set(fr.map((c: any) => c.claim_id));
+  return [...fr, ...all.filter((c: any) => !seen.has(c.claim_id))].slice(0, pageSize);
 }
 
 export default {
-  CLAIM_SEARCH,
-  FILE_REFLECT,
-  GET,
-  PREFERENCE_GET,
-  RESOLVE,
-  SETTINGS_GET,
-  STATUS,
-  TXO_LIST,
-  VERSION,
-  WALLET_BALANCE,
-  getDaemonRPC,
-  getStaticDaemonRPC,
-  setDaemonRPC,
-  isUsingProxy,
+  ODYSEE_API,
+  NOT_TAGS: NOT_TAGS_DEFAULT,
+  FRENCH_TAGS,
   rpc,
+  claimSearch,
+  resolve,
+  getStreamUrl,
+  thumbnailUrl,
+  getTrending,
+  getChannelVideos,
+  searchContent,
 };
