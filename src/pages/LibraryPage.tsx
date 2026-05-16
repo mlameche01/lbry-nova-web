@@ -1,43 +1,5 @@
-import React, { JSX } from "react";
-import CustomSVG from "~/components/CustomSVG";
-import Error from "~/components/Error";
-import Loader from "~/components/Loader";
-
+import { JSX } from 'react';
 function LibraryPage(): JSX.Element {
-  const localPreferenceResponse: object = {
-    error: {
-      message: "Not yet implemented.",
-    },
-  };
-
-  return (
-    <>
-      <h1>
-        <CustomSVG
-          style={{
-            fill: "transparent",
-            height: "24",
-            width: "24",
-            verticalAlign: "middle",
-            stroke: "white",
-            strokeWidth: "2px",
-          }}
-          icon="key"
-          viewBox="0 0 24 24"
-        />{" "}
-        <span style={{ verticalAlign: "middle" }}>Library</span>
-      </h1>
-      {localPreferenceResponse ? (
-        localPreferenceResponse.error ? (
-          <Error message={localPreferenceResponse.error.message} />
-        ) : (
-          <>TODO Library page</>
-        )
-      ) : (
-        <Loader />
-      )}
-    </>
-  );
+  return <div style={{padding:32,color:'#aaa'}}><h2>LibraryPage</h2><p>Page en cours de développement.</p></div>;
 }
-
 export default LibraryPage;

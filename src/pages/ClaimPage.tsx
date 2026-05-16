@@ -7,30 +7,34 @@ import Loader from "~/components/Loader";
 
 function ClaimPage(): JSX.Element {
   const params: Params<string> = useParams();
-  const claim: string = params["*"];
+  // URL format: @channel:id/name:id  or  name:id
+  const claimPath = params["*"] ?? "";
+  // Convert : back to # for lbry:// URLs
+  const lbryUrl = "lbry://" + claimPath.replace(/:([a-f0-9]+)/gi, "#$1");
 
-  const [claimResolveData, setClaimResolveData] = useState<object>(null);
+  const [claimData, setClaimData] = useState<object | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect((): void => {
-    LBRY.rpc(
-      LBRY.getDaemonRPC(),
-      LBRY.RESOLVE,
-      { urls: [claim] },
-      undefined,
-      LBRY.isUsingProxy(),
-    ).then((json: object): void => {
-      setClaimResolveData(json.result[claim] ?? null);
-    });
-  }, [claim]);
+    if (!claimPath) return;
+    setClaimData(null);
+    setError(null);
+    LBRY.resolve([lbryUrl])
+      .then((result: object) => {
+        const item = (result as any)[lbryUrl];
+        if (!item || item.error) {
+          setError(item?.error?.message ?? "Contenu introuvable.");
+        } else {
+          setClaimData(item);
+        }
+      })
+      .catch((e) => setError(e.message));
+  }, [claimPath]);
 
-  if (!claimResolveData) {
-    return <Loader />;
-  }
-
-  if (claimResolveData.type === "claim") {
-    return <Claim data={claimResolveData} />;
-  }
-  return <Error message="Type isn't a claim." />;
+  if (error) return <Error message={error} />;
+  if (!claimData) return <Loader />;
+  if ((claimData as any).type === "claim") return <Claim data={claimData} />;
+  return <Error message="Type de claim inconnu." />;
 }
 
 export default ClaimPage;
